@@ -1,57 +1,85 @@
+import socketio
 import cv2
 import pickle
-import cvzone
 import numpy as np
+import base64
+import time
 
-# Video feed
-cap = cv2.VideoCapture('tcarPark.mp4')
+# Create a Socket.IO client instance
+sio = socketio.Client()
 
-with open('CarParkPos', 'rb') as f:
-    posList = pickle.load(f)
+# Event for successful connection
+@sio.event
+def connect():
+    print("Connection established")
 
-width, height = 107, 48
+# Event for disconnection
+@sio.event
+def disconnect():
+    print("Disconnected from server")
+
+# Modified event for connection failure to accept an argument
+@sio.event
+def connect_error(data):
+    print("The connection failed!", data)
+
+# Function to encode video frames in Base64
+def encode_frame(frame):
+    ret, buffer = cv2.imencode('.jpg', frame)
+    if ret:
+        return base64.b64encode(buffer).decode('utf-8')
+    return None
+
+# Function to handle video processing and data sending
+def process_and_send_data():
+    cap = cv2.VideoCapture('carPark.mp4')
+    with open('CarParkPos', 'rb') as f:
+        posList = pickle.load(f)
+    width, height = 107, 48
+
+    while cap.isOpened():
+        ret, img = cap.read()
+        if not ret:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            continue
+
+        # Resize the frame to reduce its size
+        img = cv2.resize(img, (640, 480))
+
+        imgGray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        imgBlur = cv2.GaussianBlur(imgGray, (3, 3), 1)
+        imgThreshold = cv2.adaptiveThreshold(imgBlur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                             cv2.THRESH_BINARY_INV, 25, 16)
+        imgMedian = cv2.medianBlur(imgThreshold, 5)
+        kernel = np.ones((3, 3), np.uint8)
+        imgDilate = cv2.dilate(imgMedian, kernel, iterations=1)
 
 
-def checkParkingSpace(imgPro):
-    spaceCounter = 0
+        spaceCounter = 0
+        for pos in posList:
+            x, y = pos
+            imgCrop = imgDilate[y:y + height, x:x + width]
+            count = cv2.countNonZero(imgCrop)
+            spaceCounter += (count < 900)
 
-    for pos in posList:
-        x, y = pos
+        encoded_frame = encode_frame(img)
+        if encoded_frame:
+            parkingData = {
+                'free_spaces': spaceCounter,
+                'total_spaces': len(posList),
+                'encoded_frame': encoded_frame
+            }
+            sio.emit('parkingData', parkingData)
+        time.sleep(10)  # Control the frame rate
 
-        imgCrop = imgPro[y:y + height, x:x + width]
-        # cv2.imshow(str(x * y), imgCrop)
-        count = cv2.countNonZero(imgCrop)
+    cap.release()
 
-
-        if count < 900:
-            color = (0, 255, 0)
-            thickness = 5
-            spaceCounter += 1
-        else:
-            color = (0, 0, 255)
-            thickness = 2
-
-        cv2.rectangle(img, pos, (pos[0] + width, pos[1] + height), color, thickness)
-        cvzone.putTextRect(img, str(count), (x, y + height - 3), scale=1,
-                           thickness=2, offset=0, colorR=color)
-
-    cvzone.putTextRect(img, f'Free: {spaceCounter}/{len(posList)}', (100, 50), scale=3,
-                           thickness=5, offset=20, colorR=(0,200,0))
-while True:
-
-    if cap.get(cv2.CAP_PROP_POS_FRAMES) == cap.get(cv2.CAP_PROP_FRAME_COUNT):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    success, img = cap.read()
-    imgGray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    imgBlur = cv2.GaussianBlur(imgGray, (3, 3), 1)
-    imgThreshold = cv2.adaptiveThreshold(imgBlur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                         cv2.THRESH_BINARY_INV, 25, 16)
-    imgMedian = cv2.medianBlur(imgThreshold, 5)
-    kernel = np.ones((3, 3), np.uint8)
-    imgDilate = cv2.dilate(imgMedian, kernel, iterations=1)
-
-    checkParkingSpace(imgDilate)
-    cv2.imshow("Image", img)
-    # cv2.imshow("ImageBlur", imgBlur)
-    # cv2.imshow("ImageThres", imgMedian)
-    cv2.waitKey(10)
+if __name__ == "__main__":
+    try:
+        sio.connect('http://localhost:3000')
+        process_and_send_data()
+    except Exception as e:
+        print("An error occurred:", e)
+    finally:
+        sio.disconnect()
+        print("Cleaned up resources")
