@@ -32,8 +32,8 @@ def encode_frame(frame):
 
 # Function to handle video processing and data sending
 def process_and_send_data():
-    cap = cv2.VideoCapture('carPark.mp4')
-    with open('CarParkPos', 'rb') as f:
+    cap = cv2.VideoCapture('C:\\Users\\ELH\\Desktop\\python pfa\\OPTIPARK\\carPark.mp4')
+    with open('C:\\Users\\ELH\\Desktop\\python pfa\\OPTIPARK\\CarParkPos', 'rb') as f:
         posList = pickle.load(f)
     width, height = 107, 48
 
@@ -70,7 +70,7 @@ def process_and_send_data():
                 'encoded_frame': encoded_frame
             }
             sio.emit('parkingData', parkingData)
-        time.sleep(10)  # Control the frame rate
+            # time.sleep(0.0001)  # Control the frame rate
 
     cap.release()
 
